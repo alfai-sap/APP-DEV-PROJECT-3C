@@ -121,10 +121,6 @@ class MultilingualRecognitionApp:
             'Swedish': {'ocr': 'swe', 'translate': 'sv'}
         }
         
-        # Add a stack to store canvas states for undo functionality
-        self.undo_stack = []
-        self.max_undo = 5
-        
         self.setup_gui()
 
     def setup_gui(self):
@@ -195,7 +191,6 @@ class MultilingualRecognitionApp:
         ttk.Button(controls, text="Clear", command=self.clear_canvas).pack(side=tk.LEFT, padx=5)
         ttk.Button(controls, text="Upload", command=self.upload_image).pack(side=tk.LEFT, padx=5)
         ttk.Button(controls, text="Recognize", command=self.recognize_text).pack(side=tk.LEFT, padx=5)
-        ttk.Button(controls, text="Undo", command=self.undo).pack(side=tk.LEFT, padx=5)  # Add undo button
         
         # Status indicator
         self.status_label = ttk.Label(controls, text="Tool: Pen")
@@ -245,7 +240,6 @@ class MultilingualRecognitionApp:
         self.stroke_completed = False
         self.last_x = event.x
         self.last_y = event.y
-        self.save_canvas_state()  # Save canvas state before starting a new stroke
 
     def paint(self, event):
         if self.last_x and self.last_y:
@@ -277,7 +271,6 @@ class MultilingualRecognitionApp:
         self.canvas.delete("all")
         self.recognized_text.delete(1.0, tk.END)
         self.translated_text.delete(1.0, tk.END)
-        self.undo_stack.clear()  # Clear the undo stack
 
     def upload_image(self):
         file_path = filedialog.askopenfilename(
@@ -385,26 +378,6 @@ class MultilingualRecognitionApp:
             if current_time - self.last_process_time >= self.process_delay:
                 self.recognize_text(real_time=True)
                 self.last_process_time = current_time
-
-    def save_canvas_state(self):
-        """Save the current state of the canvas for undo functionality"""
-        x = self.canvas.winfo_rootx() + self.canvas.winfo_x()
-        y = self.canvas.winfo_rooty() + self.canvas.winfo.y()
-        x1 = x + self.canvas.winfo_width()
-        y1 = y + self.canvas.winfo.height()
-        image = ImageGrab.grab(bbox=(x, y, x1, y1))
-        if len(self.undo_stack) >= self.max_undo:
-            self.undo_stack.pop(0)  # Remove the oldest state if stack is full
-        self.undo_stack.append(image)
-
-    def undo(self):
-        """Undo the last action on the canvas"""
-        if self.undo_stack:
-            self.canvas.delete("all")
-            image = self.undo_stack.pop()
-            photo = ImageTk.PhotoImage(image)
-            self.canvas.create_image(0, 0, image=photo, anchor=tk.NW)
-            self.canvas.image = photo
 
 def main():
     root = tk.Tk()
