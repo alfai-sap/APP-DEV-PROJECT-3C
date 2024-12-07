@@ -1,12 +1,11 @@
-# APP_DEV_PROJECT.py
 import os
 import cv2
-import numpy as np
+import numpy as np  # Fix the import statement
 import pytesseract
 from googletrans import Translator
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from PIL import Image, ImageTk, ImageDraw, ImageGrab
+from PIL import Image, ImageTk, ImageDraw, ImageGrab, ImageOps  # Add ImageOps for inverting colors
 import logging
 from pathlib import Path
 import time
@@ -14,40 +13,50 @@ import time
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 
-# Configure Tesseract path
-if os.name == 'nt':
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+def check_tesseract_installation():
+    """Check if Tesseract is properly installed and configured"""
+    if not os.path.exists(r'C:\Program Files\Tesseract-OCR\tesseract.exe'):
+        raise RuntimeError("Tesseract is not installed in the expected location")
+    
+    tessdata_path = r'C:\Program Files\Tesseract-OCR\tessdata'
+    if not os.path.exists(tessdata_path):
+        raise RuntimeError("Tessdata directory not found")
+    
+    if not os.path.exists(os.path.join(tessdata_path, 'eng.traineddata')):
+        raise RuntimeError("English language data not found")
 
-# Update the enhance_image function
+# Configure Tesseract path
+if os.name == 'nt':  # Windows
+    try:
+        check_tesseract_installation()
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        os.environ['TESSDATA_PREFIX'] = r'C:\Program Files\Tesseract-OCR\tessdata'
+        logging.info("Tesseract configured successfully")
+    except Exception as e:
+        logging.error(f"Tesseract configuration error: {e}")
+        messagebox.showerror("Error", 
+            "Tesseract is not properly installed.\n"
+            "Please install Tesseract-OCR and ensure the language data files are present.")
+        sys.exit(1)
+
 def enhance_image(image):
-    """Enhanced image processing pipeline for handwriting recognition"""
+    """Enhanced image processing pipeline specifically for handwriting recognition"""
     try:
         # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        logging.debug("Converted to grayscale")
         
-        # Apply Gaussian blur to reduce noise
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        logging.debug("Applied Gaussian blur")
+        # Invert colors (black text on white background)
+        gray = cv2.bitwise_not(gray)
         
-        # Enhance contrast
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(blurred)
-        logging.debug("Enhanced contrast")
-        
-        # Thresholding
-        _, binary = cv2.threshold(enhanced, 0, 255, 
-                                cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        logging.debug("Applied thresholding")
+        # Apply thresholding to get binary image
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
         # Noise removal
         kernel = np.ones((2,2), np.uint8)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-        logging.debug("Removed noise")
         
-        # Dilation to connect components
+        # Thicken text
         binary = cv2.dilate(binary, kernel, iterations=1)
-        logging.debug("Applied dilation")
         
         return binary
     except Exception as e:
@@ -73,7 +82,7 @@ class MultilingualRecognitionApp:
         self.current_tool = "pen"
         self.pen_color = "black"
         self.eraser_color = "white"
-        self.pen_width = 3
+        self.pen_width = 3  # Restore original pen width
         self.eraser_width = 50
         
         # Add real-time processing variables
@@ -81,29 +90,40 @@ class MultilingualRecognitionApp:
         self.last_process_time = time.time()
         self.process_delay = 1.0  # 1 second delay
         
-        # Languages
+        self.stroke_completed = False
+        self.last_stroke_time = 0
+        self.stroke_delay = 0.5  # Delay after stroke completion before detection
+
+        # Update the languages dictionary with correct codes
+        # Use 'eng' for Tesseract but 'en' for Google Translate
         self.languages = {
-            'English': 'en',
-            'Spanish': 'es',
-            'French': 'fr',
-            'German': 'de',
-            'Chinese': 'zh-cn',
-            'Japanese': 'ja',
-            'Italian': 'it',
-            'Portuguese': 'pt',
-            'Russian': 'ru',
-            'Korean': 'ko',
-            'Arabic': 'ar',
-            'Dutch': 'nl',
-            'Greek': 'el',
-            'Hindi': 'hi',
-            'Turkish': 'tr',
-            'Vietnamese': 'vi',
-            'Thai': 'th',
-            'Polish': 'pl',
-            'Indonesian': 'id',
-            'Swedish': 'sv'
+            'English': {'ocr': 'eng', 'translate': 'en'},
+            'Filipino': {'ocr': 'tgl', 'translate': 'tl'},  # Add Filipino/Tagalog
+            'Cebuano': {'ocr': 'ceb', 'translate': 'ceb'},  # Add Cebuano/Bisaya
+            'Spanish': {'ocr': 'spa', 'translate': 'es'},
+            'French': {'ocr': 'fra', 'translate': 'fr'},
+            'German': {'ocr': 'deu', 'translate': 'de'},
+            'Chinese': {'ocr': 'chi_sim', 'translate': 'zh-cn'},
+            'Japanese': {'ocr': 'jpn', 'translate': 'ja'},
+            'Italian': {'ocr': 'ita', 'translate': 'it'},
+            'Portuguese': {'ocr': 'por', 'translate': 'pt'},
+            'Russian': {'ocr': 'rus', 'translate': 'ru'},
+            'Korean': {'ocr': 'kor', 'translate': 'ko'},
+            'Arabic': {'ocr': 'ara', 'translate': 'ar'},
+            'Dutch': {'ocr': 'nld', 'translate': 'nl'},
+            'Greek': {'ocr': 'ell', 'translate': 'el'},
+            'Hindi': {'ocr': 'hin', 'translate': 'hi'},
+            'Turkish': {'ocr': 'tur', 'translate': 'tr'},
+            'Vietnamese': {'ocr': 'vie', 'translate': 'vi'},
+            'Thai': {'ocr': 'tha', 'translate': 'th'},
+            'Polish': {'ocr': 'pol', 'translate': 'pl'},
+            'Indonesian': {'ocr': 'ind', 'translate': 'id'},
+            'Swedish': {'ocr': 'swe', 'translate': 'sv'}
         }
+        
+        # Add a stack to store canvas states for undo functionality
+        self.undo_stack = []
+        self.max_undo = 5
         
         self.setup_gui()
 
@@ -119,12 +139,45 @@ class MultilingualRecognitionApp:
         # Canvas
         self.canvas = tk.Canvas(left_panel, width=800, height=400, bg='white')
         self.canvas.pack(pady=10)
+        
+        # Update canvas bindings
         self.canvas.bind("<B1-Motion>", self.paint)
-        self.canvas.bind("<ButtonRelease-1>", self.reset_coordinates)
+        self.canvas.bind("<ButtonRelease-1>", self.stroke_completed)
+        self.canvas.bind("<Button-1>", self.start_stroke)
         
         # Controls
         controls = ttk.Frame(left_panel)
         controls.pack(fill=tk.X, pady=10)
+        
+            # Language selection with swap button
+        lang_frame = ttk.LabelFrame(left_panel, text="Languages")
+        lang_frame.pack(fill=tk.X, pady=10)
+        
+        lang_controls = ttk.Frame(lang_frame)
+        lang_controls.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Source language
+        ttk.Label(lang_controls, text="From:").pack(side=tk.LEFT, padx=5)
+        self.source_lang = ttk.Combobox(lang_controls, 
+                                    values=sorted(list(self.languages.keys())), 
+                                    state='readonly',
+                                    width=15)
+        self.source_lang.pack(side=tk.LEFT, padx=5)
+        self.source_lang.set("English")
+        
+        # Swap languages button
+        ttk.Button(lang_controls, 
+                text="⇄",
+                command=self.swap_languages).pack(side=tk.LEFT, padx=5)
+        
+        # Target language
+        ttk.Label(lang_controls, text="To:").pack(side=tk.LEFT, padx=5)
+        self.target_lang = ttk.Combobox(lang_controls,
+                                    values=sorted(list(self.languages.keys())),
+                                    state='readonly',
+                                    width=15)
+        self.target_lang.pack(side=tk.LEFT, padx=5)
+        self.target_lang.set("Spanish")
         
         # Tool controls
         self.tool_var = tk.StringVar(value="pen")
@@ -142,24 +195,14 @@ class MultilingualRecognitionApp:
         ttk.Button(controls, text="Clear", command=self.clear_canvas).pack(side=tk.LEFT, padx=5)
         ttk.Button(controls, text="Upload", command=self.upload_image).pack(side=tk.LEFT, padx=5)
         ttk.Button(controls, text="Recognize", command=self.recognize_text).pack(side=tk.LEFT, padx=5)
+        ttk.Button(controls, text="Undo", command=self.undo).pack(side=tk.LEFT, padx=5)  # Add undo button
         
         # Status indicator
         self.status_label = ttk.Label(controls, text="Tool: Pen")
         self.status_label.pack(side=tk.RIGHT, padx=5)
         
-        # Language selection
-        lang_frame = ttk.LabelFrame(left_panel, text="Languages")
-        lang_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(lang_frame, text="From:").pack(side=tk.LEFT, padx=5)
-        self.source_lang = ttk.Combobox(lang_frame, values=sorted(list(self.languages.keys())), state='readonly')
-        self.source_lang.pack(side=tk.LEFT, padx=5)
-        self.source_lang.set("English")
-        
-        ttk.Label(lang_frame, text="To:").pack(side=tk.LEFT, padx=5)
-        self.target_lang = ttk.Combobox(lang_frame, values=sorted(list(self.languages.keys())), state='readonly')
-        self.target_lang.pack(side=tk.LEFT, padx=5)
-        self.target_lang.set("Spanish")
+        # Remove duplicate language selection frame
+        # Keep only the one inside the controls section
         
         # Right panel (Output)
         right_panel = ttk.Frame(container)
@@ -173,6 +216,13 @@ class MultilingualRecognitionApp:
         self.translated_text = tk.Text(right_panel, height=10, width=50)
         self.translated_text.pack(pady=5)
 
+    def swap_languages(self):
+        """Swap source and target languages"""
+        source = self.source_lang.get()
+        target = self.target_lang.get()
+        self.source_lang.set(target)
+        self.target_lang.set(source)
+
     def update_tool(self):
         self.current_tool = self.tool_var.get()
         self.status_label.config(text=f"Tool: {self.current_tool.title()}")
@@ -183,12 +233,19 @@ class MultilingualRecognitionApp:
             self.process_real_time()
 
     def process_real_time(self):
-        if self.real_time_active:
+        if self.real_time_active and self.stroke_completed:
             current_time = time.time()
-            if current_time - self.last_process_time >= self.process_delay:
+            if current_time - self.last_stroke_time >= self.stroke_delay:
                 self.recognize_text(real_time=True)
-                self.last_process_time = current_time
-            self.root.after(100, self.process_real_time)
+                self.stroke_completed = False  # Reset for next stroke
+            if self.real_time_active:
+                self.root.after(100, self.process_real_time)
+    
+    def start_stroke(self, event):
+        self.stroke_completed = False
+        self.last_x = event.x
+        self.last_y = event.y
+        self.save_canvas_state()  # Save canvas state before starting a new stroke
 
     def paint(self, event):
         if self.last_x and self.last_y:
@@ -220,6 +277,7 @@ class MultilingualRecognitionApp:
         self.canvas.delete("all")
         self.recognized_text.delete(1.0, tk.END)
         self.translated_text.delete(1.0, tk.END)
+        self.undo_stack.clear()  # Clear the undo stack
 
     def upload_image(self):
         file_path = filedialog.askopenfilename(
@@ -239,7 +297,7 @@ class MultilingualRecognitionApp:
 
     def recognize_text(self, real_time=False):
         try:
-            # Capture canvas
+            # Capture canvas content
             x = self.canvas.winfo_rootx() + self.canvas.winfo_x()
             y = self.canvas.winfo_rooty() + self.canvas.winfo_y()
             x1 = x + self.canvas.winfo_width()
@@ -257,57 +315,96 @@ class MultilingualRecognitionApp:
             cv2.imwrite('processed.png', processed)
             logging.debug("Saved processed image")
             
-            # Configure Tesseract for handwriting
-            custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '
-            
-            # OCR
-            text = pytesseract.image_to_string(
-                processed,
-                config=custom_config,
-                lang='eng'
+            # Simplified OCR configuration focused on handwriting
+            custom_config = (
+                '--oem 1 '  # LSTM OCR Engine
+                '--psm 6 '  # Assume uniform block of text
+                '-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '
+                '-c tessedit_write_images=1 '
+                '-c preserve_interword_spaces=1'
             )
-            logging.debug(f"OCR Result: {text}")
+
+            # Perform OCR
+            text = pytesseract.image_to_string(processed, config=custom_config)
+            text = ' '.join(text.strip().split())  # Clean up whitespace
             
             if not text.strip():
-                messagebox.showinfo("Info", "No text detected")
+                if not real_time:
+                    messagebox.showinfo("Info", "No text detected")
                 return
             
-            if not real_time:
-                self.recognized_text.delete(1.0, tk.END)
-            else:
-                self.recognized_text.delete(1.0, tk.END)  # Clear previous real-time results
-            
+            # Update UI
+            self.recognized_text.delete(1.0, tk.END)
             self.recognized_text.insert(tk.END, text + "\n")
             
-            # Translate
+            # Handle translation
             if text.strip():
-                source_lang = self.source_lang.get()
-                target_lang = self.target_lang.get()
-                
                 try:
+                    source_lang = self.source_lang.get()
+                    target_lang = self.target_lang.get()
+                    
+                    # Clear previous translation
+                    self.translated_text.delete(1.0, tk.END)
+                    
+                    # Perform translation
                     translation = self.translator.translate(
                         text,
-                        src=self.languages[source_lang],
-                        dest=self.languages[target_lang]
+                        src=self.languages[source_lang]['translate'],
+                        dest=self.languages[target_lang]['translate']
                     )
                     
-                    if not real_time:
-                        self.translated_text.delete(1.0, tk.END)
+                    # Update translation field
+                    if translation and translation.text:
+                        self.translated_text.insert(tk.END, translation.text + "\n")
+                        logging.debug(f"Translation successful: {translation.text}")
                     else:
-                        self.translated_text.delete(1.0, tk.END)  # Clear previous real-time results
-                    
-                    self.translated_text.insert(tk.END, translation.text + "\n")
-                    
+                        logging.warning("Translation returned empty result")
+                        if not real_time:
+                            messagebox.showwarning("Warning", "Translation failed")
+                            
                 except Exception as e:
-                    logging.error(f"Translation error: {e}")
+                    logging.error(f"Translation error: {str(e)}")
                     if not real_time:
                         messagebox.showerror("Translation Error", 
-                                           "Failed to translate text")
-        
+                                           f"Failed to translate text: {str(e)}")
+                    self.translated_text.delete(1.0, tk.END)
+                    self.translated_text.insert(tk.END, "Translation error occurred")
+                    
         except Exception as e:
             logging.error(f"Recognition error: {e}")
             if not real_time:
                 messagebox.showerror("Error", str(e))
+
+    def stroke_completed(self, event):
+        self.stroke_completed = True
+        self.last_stroke_time = time.time()
+        self.reset_coordinates(event)
+        
+        if self.real_time_active:
+            current_time = time.time()
+            if current_time - self.last_process_time >= self.process_delay:
+                self.recognize_text(real_time=True)
+                self.last_process_time = current_time
+
+    def save_canvas_state(self):
+        """Save the current state of the canvas for undo functionality"""
+        x = self.canvas.winfo_rootx() + self.canvas.winfo_x()
+        y = self.canvas.winfo_rooty() + self.canvas.winfo.y()
+        x1 = x + self.canvas.winfo_width()
+        y1 = y + self.canvas.winfo.height()
+        image = ImageGrab.grab(bbox=(x, y, x1, y1))
+        if len(self.undo_stack) >= self.max_undo:
+            self.undo_stack.pop(0)  # Remove the oldest state if stack is full
+        self.undo_stack.append(image)
+
+    def undo(self):
+        """Undo the last action on the canvas"""
+        if self.undo_stack:
+            self.canvas.delete("all")
+            image = self.undo_stack.pop()
+            photo = ImageTk.PhotoImage(image)
+            self.canvas.create_image(0, 0, image=photo, anchor=tk.NW)
+            self.canvas.image = photo
 
 def main():
     root = tk.Tk()
