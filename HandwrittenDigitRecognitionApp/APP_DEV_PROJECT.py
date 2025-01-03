@@ -203,13 +203,40 @@ class MultilingualRecognitionApp:
         right_panel = ttk.Frame(container)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         
-        ttk.Label(right_panel, text="Recognized Text:").pack(pady=5)
-        self.recognized_text = tk.Text(right_panel, height=10, width=50)
-        self.recognized_text.pack(pady=5)
+        # Recognized Text Section
+        recognized_frame = ttk.LabelFrame(right_panel, text="Recognized Text", padding="10")
+        recognized_frame.pack(fill=tk.X, pady=(5, 10), padx=5)
         
-        ttk.Label(right_panel, text="Translation:").pack(pady=5)
-        self.translated_text = tk.Text(right_panel, height=10, width=50)
-        self.translated_text.pack(pady=5)
+        self.recognized_text_label = ttk.Label(
+            recognized_frame,
+            text="No text recognized yet",
+            wraplength=400,
+            justify=tk.LEFT,
+            style="Result.TLabel"
+        )
+        self.recognized_text_label.pack(fill=tk.X, pady=5)
+        
+        # Translation Section
+        translation_frame = ttk.LabelFrame(right_panel, text="Translation", padding="10")
+        translation_frame.pack(fill=tk.X, pady=(5, 10), padx=5)
+        
+        self.translated_text_label = ttk.Label(
+            translation_frame,
+            text="No translation available",
+            wraplength=400,
+            justify=tk.LEFT,
+            style="Result.TLabel"
+        )
+        self.translated_text_label.pack(fill=tk.X, pady=5)
+        
+        # Create custom styles for the labels
+        style = ttk.Style()
+        style.configure(
+            "Result.TLabel",
+            font=('Arial', 12),
+            background='#f0f0f0',
+            padding=10
+        )
 
     def swap_languages(self):
         """Swap source and target languages"""
@@ -269,8 +296,8 @@ class MultilingualRecognitionApp:
 
     def clear_canvas(self):
         self.canvas.delete("all")
-        self.recognized_text.delete(1.0, tk.END)
-        self.translated_text.delete(1.0, tk.END)
+        self.recognized_text_label.config(text="No text recognized yet")
+        self.translated_text_label.config(text="No translation available")
 
     def upload_image(self):
         file_path = filedialog.askopenfilename(
@@ -327,17 +354,13 @@ class MultilingualRecognitionApp:
                 return
             
             # Update UI
-            self.recognized_text.delete(1.0, tk.END)
-            self.recognized_text.insert(tk.END, text + "\n")
+            self.recognized_text_label.config(text=text)
             
             # Handle translation
             if text.strip():
                 try:
                     source_lang = self.source_lang.get()
                     target_lang = self.target_lang.get()
-                    
-                    # Clear previous translation
-                    self.translated_text.delete(1.0, tk.END)
                     
                     # Perform translation
                     translation = self.translator.translate(
@@ -346,9 +369,9 @@ class MultilingualRecognitionApp:
                         dest=self.languages[target_lang]['translate']
                     )
                     
-                    # Update translation field
+                    # Update translation display
                     if translation and translation.text:
-                        self.translated_text.insert(tk.END, translation.text + "\n")
+                        self.translated_text_label.config(text=translation.text)
                         logging.debug(f"Translation successful: {translation.text}")
                     else:
                         logging.warning("Translation returned empty result")
@@ -360,8 +383,7 @@ class MultilingualRecognitionApp:
                     if not real_time:
                         messagebox.showerror("Translation Error", 
                                            f"Failed to translate text: {str(e)}")
-                    self.translated_text.delete(1.0, tk.END)
-                    self.translated_text.insert(tk.END, "Translation error occurred")
+                    self.translated_text_label.config(text="Translation error occurred")
                     
         except Exception as e:
             logging.error(f"Recognition error: {e}")
