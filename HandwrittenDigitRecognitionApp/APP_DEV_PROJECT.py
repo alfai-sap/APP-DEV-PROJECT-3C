@@ -42,20 +42,35 @@ if os.name == 'nt':  # Windows
 def enhance_image(image):
     """Enhanced image processing pipeline specifically for handwriting recognition"""
     try:
+        # Add padding to the image
+        padding = 20
+        height, width = image.shape[:2]
+        padded_image = cv2.copyMakeBorder(
+            image,
+            padding, padding, padding, padding,
+            cv2.BORDER_CONSTANT,
+            value=[255, 255, 255]
+        )
+        
         # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(padded_image, cv2.COLOR_BGR2GRAY)
         
-        # Invert colors (black text on white background)
-        gray = cv2.bitwise_not(gray)
+        # Apply adaptive thresholding
+        binary = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            21,
+            10
+        )
         
-        # Apply thresholding to get binary image
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Noise removal
+        # Noise removal and text enhancement
         kernel = np.ones((2,2), np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
         
-        # Thicken text
+        # Dilate to make text more prominent
         binary = cv2.dilate(binary, kernel, iterations=1)
         
         return binary
@@ -133,8 +148,15 @@ class MultilingualRecognitionApp:
         left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # Canvas
-        self.canvas = tk.Canvas(left_panel, width=800, height=400, bg='white')
-        self.canvas.pack(pady=10)
+        self.canvas = tk.Canvas(
+            left_panel,
+            width=800,
+            height=400,
+            bg='white',
+            highlightthickness=1,
+            highlightbackground="gray"
+        )
+        self.canvas.pack(pady=10, padx=10)
         
         # Update canvas bindings
         self.canvas.bind("<B1-Motion>", self.paint)
@@ -317,13 +339,22 @@ class MultilingualRecognitionApp:
 
     def recognize_text(self, real_time=False):
         try:
-            # Capture canvas content
-            x = self.canvas.winfo_rootx() + self.canvas.winfo_x()
-            y = self.canvas.winfo_rooty() + self.canvas.winfo_y()
-            x1 = x + self.canvas.winfo_width()
-            y1 = y + self.canvas.winfo_height()
+            # Get the exact canvas coordinates
+            canvas_x = self.canvas.winfo_rootx()
+            canvas_y = self.canvas.winfo_rooty()
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
             
-            image = ImageGrab.grab(bbox=(x, y, x1, y1))
+            # Add padding to capture area
+            padding = 10
+            image = ImageGrab.grab(bbox=(
+                canvas_x - padding,
+                canvas_y - padding,
+                canvas_x + canvas_width + padding,
+                canvas_y + canvas_height + padding
+            ))
+            
+            # Convert to numpy array and process
             cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
             
             # Process image
@@ -331,21 +362,22 @@ class MultilingualRecognitionApp:
             if processed is None:
                 raise Exception("Image processing failed")
             
-            # Save processed image for debugging
-            cv2.imwrite('processed.png', processed)
-            logging.debug("Saved processed image")
-            
-            # Simplified OCR configuration focused on handwriting
+            # Update OCR configuration for better edge detection
             custom_config = (
                 '--oem 1 '  # LSTM OCR Engine
                 '--psm 6 '  # Assume uniform block of text
                 '-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '
                 '-c tessedit_write_images=1 '
-                '-c preserve_interword_spaces=1'
+                '-c preserve_interword_spaces=1 '
+                '--dpi 300'  # Increase DPI for better recognition
             )
-
-            # Perform OCR
-            text = pytesseract.image_to_string(processed, config=custom_config)
+            
+            # Perform OCR with increased page segmentation
+            text = pytesseract.image_to_string(
+                processed,
+                config=custom_config,
+                timeout=5
+            )
             text = ' '.join(text.strip().split())  # Clean up whitespace
             
             if not text.strip():
