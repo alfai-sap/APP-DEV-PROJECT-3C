@@ -9,6 +9,16 @@ from PIL import Image, ImageTk, ImageDraw, ImageGrab, ImageOps  # Add ImageOps f
 import logging
 from pathlib import Path
 import time
+from gtts import gTTS
+import pygame
+import requests
+import tempfile
+import json
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
+import wikitextparser as wtp
+import html
+import uuid
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -136,6 +146,26 @@ class MultilingualRecognitionApp:
             'Swedish': {'ocr': 'swe', 'translate': 'sv'}
         }
         
+        # Initialize pygame mixer for audio playback
+        pygame.mixer.init()
+        
+        # Add LibreTranslate URL
+        self.libretranslate_url = "https://libretranslate.com/translate"
+        
+        # Initialize thread pool for concurrent API calls
+        self.executor = ThreadPoolExecutor(max_workers=3)
+        
+        # Add audio state tracking
+        self.current_audio = None
+        self.audio_playing = False
+        
+        # Create temp directory for audio files
+        self.temp_audio_dir = os.path.join(tempfile.gettempdir(), 'handwriting_app_audio')
+        os.makedirs(self.temp_audio_dir, exist_ok=True)
+        
+        # Initialize pygame mixer with better settings
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
+        
         self.setup_gui()
 
     def setup_gui(self):
@@ -238,7 +268,7 @@ class MultilingualRecognitionApp:
         )
         self.recognized_text_label.pack(fill=tk.X, pady=5)
         
-        # Translation Section
+        # Translation Section with Pronunciation and Description
         translation_frame = ttk.LabelFrame(right_panel, text="Translation", padding="10")
         translation_frame.pack(fill=tk.X, pady=(5, 10), padx=5)
         
@@ -251,6 +281,28 @@ class MultilingualRecognitionApp:
         )
         self.translated_text_label.pack(fill=tk.X, pady=5)
         
+        # Add pronunciation button
+        self.pronunciation_button = ttk.Button(
+            translation_frame,
+            text="🔊 Listen",
+            command=self.play_pronunciation
+        )
+        self.pronunciation_button.pack(pady=5)
+        
+        # Description Section
+        description_frame = ttk.LabelFrame(right_panel, text="Description & Pronunciation Guide", padding="10")
+        description_frame.pack(fill=tk.X, pady=(5, 10), padx=5)
+        
+        # Replace Text widget with Label
+        self.description_label = ttk.Label(
+            description_frame,
+            text="No description available",
+            wraplength=400,
+            justify=tk.LEFT,
+            style="Result.TLabel"
+        )
+        self.description_label.pack(fill=tk.X, pady=5)
+
         # Create custom styles for the labels
         style = ttk.Style()
         style.configure(
@@ -320,6 +372,7 @@ class MultilingualRecognitionApp:
         self.canvas.delete("all")
         self.recognized_text_label.config(text="No text recognized yet")
         self.translated_text_label.config(text="No translation available")
+        self.description_label.config(text="No description available")
 
     def upload_image(self):
         file_path = filedialog.askopenfilename(
@@ -404,7 +457,31 @@ class MultilingualRecognitionApp:
                     # Update translation display
                     if translation and translation.text:
                         self.translated_text_label.config(text=translation.text)
-                        logging.debug(f"Translation successful: {translation.text}")
+                        
+                        # Get pronunciation guide
+                        target_lang_code = self.languages[target_lang]['translate']
+                        pronunciation = self.get_pronunciation_guide(translation.text, target_lang_code)
+                        
+                        # Get word descriptions
+                        words = translation.text.split()
+                        descriptions = []
+                        
+                        for word in words[:3]:
+                            desc = self.get_word_description(word, target_lang_code)
+                            if desc:
+                                descriptions.append(f"\n{word}:\n{desc}")
+                        
+                        # Update description label
+                        full_text = f"Language: {target_lang}\n"
+                        if pronunciation:
+                            full_text += f"{pronunciation}\n"
+                        if descriptions:
+                            full_text += "\nDefinitions:" + "".join(descriptions)
+                        else:
+                            full_text += "\nNo detailed definitions available."
+                        
+                        self.description_label.config(text=full_text)
+                        
                     else:
                         logging.warning("Translation returned empty result")
                         if not real_time:
@@ -432,6 +509,210 @@ class MultilingualRecognitionApp:
             if current_time - self.last_process_time >= self.process_delay:
                 self.recognize_text(real_time=True)
                 self.last_process_time = current_time
+
+    def play_pronunciation(self):
+        """Play the pronunciation of the translated text with improved error handling"""
+        try:
+            text = self.translated_text_label.cget("text")
+            if text and text != "No translation available":
+                # Stop any currently playing audio
+                if self.audio_playing:
+                    pygame.mixer.music.stop()
+                    self.audio_playing = False
+                
+                # Generate unique filename
+                temp_file = os.path.join(
+                    self.temp_audio_dir,
+                    f"pronunciation_{uuid.uuid4().hex[:8]}.mp3"
+                )
+                
+                # Clean up old files
+                self.cleanup_old_audio_files()
+                
+                try:
+                    # Generate speech
+                    tts = gTTS(
+                        text=text,
+                        lang=self.languages[self.target_lang.get()]['translate'],
+                        slow=False
+                    )
+                    
+                    # Save with error handling
+                    for _ in range(3):  # Retry up to 3 times
+                        try:
+                            tts.save(temp_file)
+                            break
+                        except PermissionError:
+                            time.sleep(0.1)  # Wait briefly before retry
+                    
+                    # Load and play the audio
+                    if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+                        pygame.mixer.music.load(temp_file)
+                        pygame.mixer.music.play()
+                        self.audio_playing = True
+                        self.current_audio = temp_file
+                        
+                        # Schedule cleanup
+                        self.root.after(100, self.check_audio_finished)
+                    else:
+                        raise Exception("Failed to generate audio file")
+                        
+                except Exception as e:
+                    logging.error(f"Audio generation error: {e}")
+                    self.cleanup_audio_file(temp_file)
+                    raise
+                    
+        except Exception as e:
+            logging.error(f"Pronunciation error: {e}")
+            messagebox.showerror("Error", "Failed to play pronunciation. Please try again.")
+    
+    def check_audio_finished(self):
+        """Check if audio has finished playing and clean up"""
+        if self.audio_playing and not pygame.mixer.music.get_busy():
+            self.audio_playing = False
+            if self.current_audio:
+                self.cleanup_audio_file(self.current_audio)
+                self.current_audio = None
+        elif self.audio_playing:
+            # Check again in 100ms if still playing
+            self.root.after(100, self.check_audio_finished)
+    
+    def cleanup_audio_file(self, filepath):
+        """Safely clean up an audio file"""
+        try:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except Exception as e:
+            logging.warning(f"Failed to cleanup audio file {filepath}: {e}")
+    
+    def cleanup_old_audio_files(self):
+        """Clean up old audio files from temp directory"""
+        try:
+            current_time = time.time()
+            for filename in os.listdir(self.temp_audio_dir):
+                filepath = os.path.join(self.temp_audio_dir, filename)
+                # Remove files older than 1 hour
+                if os.path.getctime(filepath) < current_time - 3600:
+                    self.cleanup_audio_file(filepath)
+        except Exception as e:
+            logging.warning(f"Failed to cleanup old audio files: {e}")
+    
+    def __del__(self):
+        """Cleanup on application exit"""
+        try:
+            # Stop any playing audio
+            if hasattr(self, 'audio_playing') and self.audio_playing:
+                pygame.mixer.music.stop()
+            
+            # Clean up temp directory
+            if hasattr(self, 'temp_audio_dir') and os.path.exists(self.temp_audio_dir):
+                for filename in os.listdir(self.temp_audio_dir):
+                    self.cleanup_audio_file(os.path.join(self.temp_audio_dir, filename))
+                try:
+                    os.rmdir(self.temp_audio_dir)
+                except:
+                    pass
+        except:
+            pass
+
+    def get_word_description(self, word, lang_code):
+        """Enhanced word description using free APIs"""
+        descriptions = []
+        
+        # Try Free Dictionary API first
+        try:
+            url = f"https://api.dictionaryapi.dev/api/v2/entries/{lang_code}/{quote(word.lower())}"
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                if data and len(data) > 0:
+                    meanings = data[0].get('meanings', [])
+                    if meanings:
+                        for meaning in meanings[:2]:
+                            pos = meaning.get('partOfSpeech', '')
+                            definition = meaning.get('definitions', [{}])[0].get('definition', '')
+                            if definition:
+                                descriptions.append(f"({pos}) {definition}")
+                                # Add example if available
+                                example = meaning.get('definitions', [{}])[0].get('example', '')
+                                if example:
+                                    descriptions.append(f"   Example: {example}")
+        except Exception as e:
+            logging.error(f"Free Dictionary API error: {e}")
+
+        # Try Wiktionary API as backup
+        if not descriptions:
+            try:
+                url = f"https://en.wiktionary.org/w/api.php"
+                params = {
+                    'action': 'parse',
+                    'format': 'json',
+                    'page': word.lower(),
+                    'prop': 'wikitext',
+                    'section': 0
+                }
+                response = requests.get(url, params=params)
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'parse' in data and 'wikitext' in data['parse']:
+                        wikitext = data['parse']['wikitext']['*']
+                        parsed = wtp.parse(wikitext)
+                        # Extract definitions from wikitext
+                        for section in parsed.sections:
+                            if 'Etymology' in section.title or 'Definitions' in section.title:
+                                clean_text = html.unescape(section.plain_text())
+                                if clean_text:
+                                    descriptions.append(clean_text[:200] + "...")  # Limit length
+                                break
+            except Exception as e:
+                logging.error(f"Wiktionary API error: {e}")
+
+        # Try MyMemory API as final fallback
+        if not descriptions:
+            try:
+                url = f"https://api.mymemory.translated.net/get?q={quote(word)}&langpair={lang_code}|en"
+                response = requests.get(url)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('matches'):
+                        for match in data['matches'][:2]:
+                            if match.get('translation') and match.get('quality', '0') != '0':
+                                descriptions.append(f"≈ {match['translation']}")
+            except Exception as e:
+                logging.error(f"MyMemory API error: {e}")
+
+        return '\n'.join(descriptions) if descriptions else None
+
+    def get_pronunciation_guide(self, text, lang_code):
+        """Get pronunciation guide using LibreTranslate"""
+        try:
+            # Try to get IPA pronunciation from Wiktionary
+            url = f"https://en.wiktionary.org/w/api.php"
+            params = {
+                'action': 'parse',
+                'format': 'json',
+                'page': text.lower(),
+                'prop': 'wikitext',
+                'section': 0
+            }
+            response = requests.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                if 'parse' in data and 'wikitext' in data['parse']:
+                    wikitext = data['parse']['wikitext']['*']
+                    # Look for IPA pronunciation
+                    if '{{IPA|' in wikitext:
+                        ipa_start = wikitext.find('{{IPA|') + 6
+                        ipa_end = wikitext.find('}}', ipa_start)
+                        if ipa_end > ipa_start:
+                            return f"IPA: {wikitext[ipa_start:ipa_end]}"
+            
+            # Fallback to simplified pronunciation guide
+            return f"Pronunciation available through 'Listen' button"
+            
+        except Exception as e:
+            logging.error(f"Pronunciation guide error: {e}")
+            return None
 
 def main():
     root = tk.Tk()
