@@ -219,7 +219,9 @@ We welcome contributions! Here's how you can help:
 
 | Main Interface | Real-time Recognition | Translation Results |
 |----------------|----------------------|-------------------|
-| ![Main](screenshots/main-interface.png) | ![Realtime](screenshots/realtime.png) | ![Translation](screenshots/translation.png) |
+| ![Image](https://github.com/user-attachments/assets/2cdc0b6f-a225-4371-b772-b0da453fa34b) | ![Image](https://github.com/user-attachments/assets/8d3ba50c-fc5e-4f04-9d6d-af10e16376b5)| ![Image](https://github.com/user-attachments/assets/f94af199-f348-4a5e-bd62-09558b88555d) |
+
+
 
 </div>
 
